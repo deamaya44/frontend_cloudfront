@@ -4,14 +4,14 @@ on:
   push:
     branches:
       - main
+      - dev
   workflow_dispatch:
 
 env:
-  AWS_REGION: us-east-1
-  S3_BUCKET: ${{ secrets.S3_FRONTEND_BUCKET }}
-  S3_PREFIX: ${{ secrets.S3_FRONTEND_PREFIX }}
-  CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}
-  LAMBDA_API_URL: ${{ secrets.LAMBDA_API_URL }}
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+  ENVIRONMENT: ${{ github.ref_name }}
+  S3_PREFIX: "frontend/"
 
 jobs:
   deploy:
@@ -28,17 +28,45 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Get Lambda Function URL
+        id: get-lambda-url
+        run: |
+          FUNCTION_NAME="multiregion-${{ env.ENVIRONMENT }}-api"
+          LAMBDA_URL=$(aws lambda get-function-url-config \
+            --function-name $FUNCTION_NAME \
+            --region us-east-1 \
+            --query 'FunctionUrl' \
+            --output text)
+          echo "lambda_url=$LAMBDA_URL" >> $GITHUB_OUTPUT
+          echo "✅ Lambda URL: $LAMBDA_URL"
+
+      - name: Get S3 Bucket Name
+        id: get-s3-bucket
+        run: |
+          BUCKET_NAME="multiregion-${{ env.AWS_ACCOUNT_ID }}-us-east-1-${{ env.ENVIRONMENT }}-data"
+          echo "bucket_name=$BUCKET_NAME" >> $GITHUB_OUTPUT
+          echo "✅ S3 Bucket: $BUCKET_NAME"
+
+      - name: Get CloudFront Distribution ID
+        id: get-cloudfront-id
+        run: |
+          DISTRIBUTION_ID=$(aws cloudfront list-distributions \
+            --query "DistributionList.Items[?Comment=='Multi-Region Frontend Distribution'].Id" \
+            --output text)
+          echo "distribution_id=$DISTRIBUTION_ID" >> $GITHUB_OUTPUT
+          echo "✅ CloudFront Distribution ID: $DISTRIBUTION_ID"
+
       - name: Generate config.js with Lambda API URL
         run: |
           cat > config.js << EOF
           // Configuration file - Auto-generated during deployment
-          const API_URL = '${{ env.LAMBDA_API_URL }}';
+          const API_URL = '${{ steps.get-lambda-url.outputs.lambda_url }}';
           EOF
-          echo "Generated config.js with API_URL: ${{ env.LAMBDA_API_URL }}"
+          echo "Generated config.js with API_URL: ${{ steps.get-lambda-url.outputs.lambda_url }}"
 
       - name: Sync files to S3
         run: |
-          aws s3 sync . s3://${{ env.S3_BUCKET }}/${{ env.S3_PREFIX }} \
+          aws s3 sync . s3://${{ steps.get-s3-bucket.outputs.bucket_name }}/${{ env.S3_PREFIX }} \
             --exclude ".git/*" \
             --exclude "README.md" \
             --exclude ".github/*" \
@@ -50,27 +78,27 @@ jobs:
       - name: Set cache control for HTML and config files
         run: |
           # No cache for HTML files
-          aws s3 cp s3://${{ env.S3_BUCKET }}/${{ env.S3_PREFIX }}index.html s3://${{ env.S3_BUCKET }}/${{ env.S3_PREFIX }}index.html \
+          aws s3 cp s3://${{ steps.get-s3-bucket.outputs.bucket_name }}/${{ env.S3_PREFIX }}index.html s3://${{ steps.get-s3-bucket.outputs.bucket_name }}/${{ env.S3_PREFIX }}index.html \
             --cache-control "no-cache, no-store, must-revalidate" \
             --metadata-directive REPLACE
           
           # No cache for config.js to ensure latest API URL
-          aws s3 cp s3://${{ env.S3_BUCKET }}/${{ env.S3_PREFIX }}config.js s3://${{ env.S3_BUCKET }}/${{ env.S3_PREFIX }}config.js \
+          aws s3 cp s3://${{ steps.get-s3-bucket.outputs.bucket_name }}/${{ env.S3_PREFIX }}config.js s3://${{ steps.get-s3-bucket.outputs.bucket_name }}/${{ env.S3_PREFIX }}config.js \
             --cache-control "no-cache, no-store, must-revalidate" \
             --metadata-directive REPLACE
 
       - name: Invalidate CloudFront cache
         run: |
           aws cloudfront create-invalidation \
-            --distribution-id ${{ env.CLOUDFRONT_DISTRIBUTION_ID }} \
+            --distribution-id ${{ steps.get-cloudfront-id.outputs.distribution_id }} \
             --paths "/${{ env.S3_PREFIX }}*"
 
       - name: Deployment summary
         run: |
           echo "✅ Frontend deployed successfully!"
-          echo "📦 S3 Bucket: ${{ env.S3_BUCKET }}"
+          echo "📦 S3 Bucket: ${{ steps.get-s3-bucket.outputs.bucket_name }}"
           echo "📁 S3 Prefix: ${{ env.S3_PREFIX }}"
-          echo "🔗 API URL: ${{ env.LAMBDA_API_URL }}"
-          echo "🌐 CloudFront Distribution: ${{ env.CLOUDFRONT_DISTRIBUTION_ID }}"
+          echo "🔗 API URL: ${{ steps.get-lambda-url.outputs.lambda_url }}"
+          echo "🌐 CloudFront Distribution: ${{ steps.get-cloudfront-id.outputs.distribution_id }}"
           echo "🔄 Cache invalidation in progress..."
           echo "🔁 Files will be replicated automatically to secondary region"
