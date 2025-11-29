@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multi-Region User Management</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🌍 Multi-Region User Management</h1>
+            <p class="subtitle">Serverless application with AWS Lambda & RDS</p>
+        </header>
+
+        <div class="status-bar">
+            <div class="status-item">
+                <span class="label">API Status:</span>
+                <span id="api-status" class="status">Checking...</span>
+            </div>
+            <div class="status-item">
+                <span class="label">Region:</span>
+                <span id="current-region" class="status">us-east-1</span>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Create New User</h2>
+            <form id="create-user-form">
+                <div class="form-group">
+                    <label for="name">Name:</label>
+                    <input type="text" id="name" name="name" required placeholder="Enter user name">
+                </div>
+                <div class="form-group">
+                    <label for="email">Email:</label>
+                    <input type="email" id="email" name="email" required placeholder="user@example.com">
+                </div>
+                <button type="submit" class="btn btn-primary">Create User</button>
+            </form>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <h2>Users List</h2>
+                <button id="refresh-btn" class="btn btn-secondary">🔄 Refresh</button>
+            </div>
+            <div id="users-container">
+                <div class="loading">Loading users...</div>
+            </div>
+        </div>
+    </div>
+
+    <footer>
+        <p>Built with AWS Lambda, RDS, CloudFront & S3 • Multi-Region Architecture</p>
+    </footer>
+
+    <script src="config.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
