@@ -84,13 +84,18 @@ function setActiveApi(url, isPrimary) {
     
     const region = isPrimary ? 'us-east-1 (Primary)' : 'us-west-2 (Failover)';
     const status = isPrimary ? '✓ Healthy' : '⚠ Failover Active';
-    const statusClass = isPrimary ? 'healthy' : 'warning';
+    const statusClass = isPrimary ? 'healthy' : 'error';
     
     apiStatus.textContent = status;
     apiStatus.className = `status ${statusClass}`;
     currentRegion.textContent = region;
     
     console.log(`✅ Active API: ${region} - ${url}`);
+    
+    // Show alert when failing over
+    if (!isPrimary) {
+        showAlert('⚠️ Primary region unavailable - Using secondary region (us-west-2)', 'warning');
+    }
 }
 
 // Start health monitoring
@@ -135,8 +140,9 @@ function startHealthMonitoring() {
 // Make API request with automatic failover
 async function makeApiRequest(endpoint, options = {}) {
     let lastError = null;
+    const maxAttempts = CONFIG.MAX_RETRIES + 1;
     
-    for (let attempt = 0; attempt <= CONFIG.MAX_RETRIES; attempt++) {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
         try {
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), CONFIG.REQUEST_TIMEOUT);
@@ -154,19 +160,31 @@ async function makeApiRequest(endpoint, options = {}) {
             
             return await response.json();
         } catch (error) {
-            console.error(`API request failed (attempt ${attempt + 1}/${CONFIG.MAX_RETRIES + 1}):`, error.message);
+            console.error(`❌ API request failed (attempt ${attempt + 1}/${maxAttempts}):`, error.message);
             lastError = error;
             
-            // Try alternate endpoint if this is not the last attempt
-            if (attempt < CONFIG.MAX_RETRIES && CONFIG.FAILOVER_ENABLED) {
+            // Immediately try alternate endpoint on failure
+            if (CONFIG.FAILOVER_ENABLED) {
                 const alternateUrl = isUsingPrimary ? CONFIG.SECONDARY_API_URL : CONFIG.PRIMARY_API_URL;
-                const alternateHealthy = await testEndpoint(alternateUrl);
+                console.log(`🔄 Attempting failover to ${isUsingPrimary ? 'secondary' : 'primary'} region...`);
+                
+                const alternateHealthy = await testEndpoint(alternateUrl, 3000);
                 
                 if (alternateHealthy) {
-                    console.log(`🔄 Switching to ${isUsingPrimary ? 'secondary' : 'primary'} endpoint`);
+                    console.log(`✅ Switching to ${isUsingPrimary ? 'secondary' : 'primary'} endpoint`);
                     setActiveApi(alternateUrl, !isUsingPrimary);
+                    // Retry immediately with new endpoint
+                    continue;
                 }
             }
+            
+            // If this is the last attempt, throw error
+            if (attempt === maxAttempts - 1) {
+                throw lastError;
+            }
+            
+            // Wait a bit before retry
+            await new Promise(resolve => setTimeout(resolve, 1000));
         }
     }
     

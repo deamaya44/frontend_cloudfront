@@ -249,6 +249,12 @@ header h1 {
     border: 1px solid #f5c6cb;
 }
 
+.alert-warning {
+    background: #fff3cd;
+    color: #856404;
+    border: 1px solid #ffeeba;
+}
+
 footer {
     text-align: center;
     padding: 30px;
