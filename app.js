@@ -1,61 +1,176 @@
-// Configuration - loaded from config.js
-let API_URL = '';
+// Multi-Region Configuration with Automatic Failover
+let currentApiUrl = '';
+let isUsingPrimary = true;
+let healthCheckInterval = null;
 
 // DOM Elements
 const apiStatus = document.getElementById('api-status');
+const currentRegion = document.getElementById('current-region');
 const createUserForm = document.getElementById('create-user-form');
 const usersContainer = document.getElementById('users-container');
 const refreshBtn = document.getElementById('refresh-btn');
 
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
-    // Load configuration
-    await loadConfig();
+    console.log('🚀 Initializing Multi-Region Frontend...');
     
-    checkApiHealth();
+    // Set initial API URL
+    await initializeApiConnection();
+    
+    // Start periodic health checks
+    startHealthMonitoring();
+    
+    // Load initial data
     loadUsers();
     
+    // Event listeners
     createUserForm.addEventListener('submit', handleCreateUser);
     refreshBtn.addEventListener('click', loadUsers);
 });
 
-// Load Configuration
-async function loadConfig() {
+// Initialize API Connection with failover
+async function initializeApiConnection() {
+    console.log('🔍 Testing API endpoints...');
+    
+    // Try primary first
+    const primaryHealthy = await testEndpoint(CONFIG.PRIMARY_API_URL);
+    if (primaryHealthy) {
+        setActiveApi(CONFIG.PRIMARY_API_URL, true);
+        return;
+    }
+    
+    console.warn('⚠️ Primary API unavailable, trying secondary...');
+    
+    // Try secondary
+    const secondaryHealthy = await testEndpoint(CONFIG.SECONDARY_API_URL);
+    if (secondaryHealthy) {
+        setActiveApi(CONFIG.SECONDARY_API_URL, false);
+        return;
+    }
+    
+    console.error('❌ Both APIs unavailable');
+    apiStatus.textContent = '✗ All APIs Down';
+    apiStatus.className = 'status error';
+    currentRegion.textContent = 'N/A';
+}
+
+// Test endpoint health
+async function testEndpoint(url, timeout = CONFIG.REQUEST_TIMEOUT) {
     try {
-        const response = await fetch('config.js');
-        const configText = await response.text();
-        // Extract API_URL from config.js
-        const match = configText.match(/API_URL\s*=\s*['"]([^'"]+)['"]/);
-        if (match && match[1]) {
-            API_URL = match[1];
-            console.log('API URL loaded:', API_URL);
-        } else {
-            throw new Error('Could not parse API_URL from config');
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeout);
+        
+        const response = await fetch(`${url}/health`, {
+            signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
+        
+        if (response.ok) {
+            const data = await response.json();
+            return data.status === 'healthy';
         }
+        return false;
     } catch (error) {
-        console.error('Failed to load config:', error);
-        // Fallback to environment variable or default
-        API_URL = window.CONFIG?.API_URL || '';
+        console.error(`Endpoint ${url} test failed:`, error.message);
+        return false;
     }
 }
 
-// Check API Health
-async function checkApiHealth() {
-    try {
-        const response = await fetch(`${API_URL}/health`);
-        const data = await response.json();
-        
-        if (response.ok && data.status === 'healthy') {
-            apiStatus.textContent = '✓ Healthy';
-            apiStatus.classList.add('healthy');
-        } else {
-            throw new Error('API unhealthy');
-        }
-    } catch (error) {
-        apiStatus.textContent = '✗ Error';
-        apiStatus.classList.add('error');
-        console.error('Health check failed:', error);
+// Set active API
+function setActiveApi(url, isPrimary) {
+    currentApiUrl = url;
+    isUsingPrimary = isPrimary;
+    
+    const region = isPrimary ? 'us-east-1 (Primary)' : 'us-west-2 (Failover)';
+    const status = isPrimary ? '✓ Healthy' : '⚠ Failover Active';
+    const statusClass = isPrimary ? 'healthy' : 'warning';
+    
+    apiStatus.textContent = status;
+    apiStatus.className = `status ${statusClass}`;
+    currentRegion.textContent = region;
+    
+    console.log(`✅ Active API: ${region} - ${url}`);
+}
+
+// Start health monitoring
+function startHealthMonitoring() {
+    if (healthCheckInterval) {
+        clearInterval(healthCheckInterval);
     }
+    
+    healthCheckInterval = setInterval(async () => {
+        console.log('🔍 Performing health check...');
+        
+        // Check current API
+        const currentHealthy = await testEndpoint(currentApiUrl);
+        
+        if (!currentHealthy) {
+            console.warn(`⚠️ Current API (${isUsingPrimary ? 'Primary' : 'Secondary'}) is down`);
+            
+            // Try to failover
+            const alternateUrl = isUsingPrimary ? CONFIG.SECONDARY_API_URL : CONFIG.PRIMARY_API_URL;
+            const alternateHealthy = await testEndpoint(alternateUrl);
+            
+            if (alternateHealthy) {
+                console.log(`✅ Failing over to ${isUsingPrimary ? 'Secondary' : 'Primary'}`);
+                setActiveApi(alternateUrl, !isUsingPrimary);
+                loadUsers(); // Refresh data from new endpoint
+            } else {
+                apiStatus.textContent = '✗ All APIs Down';
+                apiStatus.className = 'status error';
+            }
+        } else if (!isUsingPrimary && CONFIG.FAILOVER_ENABLED) {
+            // Try to failback to primary if it's available
+            const primaryHealthy = await testEndpoint(CONFIG.PRIMARY_API_URL);
+            if (primaryHealthy) {
+                console.log('✅ Primary API restored, failing back...');
+                setActiveApi(CONFIG.PRIMARY_API_URL, true);
+                loadUsers(); // Refresh data from primary
+            }
+        }
+    }, CONFIG.HEALTH_CHECK_INTERVAL);
+}
+
+// Make API request with automatic failover
+async function makeApiRequest(endpoint, options = {}) {
+    let lastError = null;
+    
+    for (let attempt = 0; attempt <= CONFIG.MAX_RETRIES; attempt++) {
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), CONFIG.REQUEST_TIMEOUT);
+            
+            const response = await fetch(`${currentApiUrl}${endpoint}`, {
+                ...options,
+                signal: controller.signal
+            });
+            
+            clearTimeout(timeoutId);
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            
+            return await response.json();
+        } catch (error) {
+            console.error(`API request failed (attempt ${attempt + 1}/${CONFIG.MAX_RETRIES + 1}):`, error.message);
+            lastError = error;
+            
+            // Try alternate endpoint if this is not the last attempt
+            if (attempt < CONFIG.MAX_RETRIES && CONFIG.FAILOVER_ENABLED) {
+                const alternateUrl = isUsingPrimary ? CONFIG.SECONDARY_API_URL : CONFIG.PRIMARY_API_URL;
+                const alternateHealthy = await testEndpoint(alternateUrl);
+                
+                if (alternateHealthy) {
+                    console.log(`🔄 Switching to ${isUsingPrimary ? 'secondary' : 'primary'} endpoint`);
+                    setActiveApi(alternateUrl, !isUsingPrimary);
+                }
+            }
+        }
+    }
+    
+    throw lastError || new Error('Request failed after all retries');
 }
 
 // Load Users
@@ -63,18 +178,18 @@ async function loadUsers() {
     usersContainer.innerHTML = '<div class="loading">Loading users...</div>';
     
     try {
-        const response = await fetch(`${API_URL}/users`);
-        const data = await response.json();
+        const data = await makeApiRequest('/users');
         
-        if (response.ok && data.users) {
+        if (data.users) {
             displayUsers(data.users);
         } else {
-            throw new Error('Failed to load users');
+            throw new Error('Invalid response format');
         }
     } catch (error) {
         usersContainer.innerHTML = `
             <div class="alert alert-error">
-                Failed to load users. Please check your API configuration.
+                Failed to load users: ${error.message}
+                <br><small>Check console for details.</small>
             </div>
         `;
         console.error('Load users failed:', error);
@@ -96,10 +211,32 @@ function displayUsers(users) {
             <p><strong>Email:</strong> ${escapeHtml(user.email)}</p>
             <p class="user-id"><strong>ID:</strong> ${user.id}</p>
             <p class="user-date"><strong>Created:</strong> ${formatDate(user.created_at)}</p>
+            <button class="btn-delete" onclick="deleteUser(${user.id})" title="Delete user">
+                🗑️ Delete
+            </button>
         </div>
     `).join('');
     
     usersContainer.innerHTML = `<div class="users-grid">${usersHTML}</div>`;
+}
+
+// Delete User
+async function deleteUser(userId) {
+    if (!confirm('Are you sure you want to delete this user?')) {
+        return;
+    }
+    
+    try {
+        const data = await makeApiRequest(`/users/${userId}`, {
+            method: 'DELETE'
+        });
+        
+        showAlert('User deleted successfully!', 'success');
+        loadUsers(); // Refresh the list
+    } catch (error) {
+        showAlert(`Error deleting user: ${error.message}`, 'error');
+        console.error('Delete user failed:', error);
+    }
 }
 
 // Handle Create User
@@ -110,7 +247,7 @@ async function handleCreateUser(e) {
     const email = document.getElementById('email').value;
     
     try {
-        const response = await fetch(`${API_URL}/users`, {
+        const data = await makeApiRequest('/users', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -118,9 +255,7 @@ async function handleCreateUser(e) {
             body: JSON.stringify({ name, email })
         });
         
-        const data = await response.json();
-        
-        if (response.ok) {
+        if (data.user || data.message) {
             showAlert('User created successfully!', 'success');
             createUserForm.reset();
             loadUsers();

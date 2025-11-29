@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Debug Frontend</title>
+</head>
+<body>
+    <h1>Debug Console</h1>
+    <div id="output"></div>
+    
+    <script src="config.js"></script>
+    <script>
+        const output = document.getElementById('output');
+        
+        function log(msg) {
+            console.log(msg);
+            output.innerHTML += `<p>${msg}</p>`;
+        }
+        
+        // Test 1: CONFIG loaded
+        log('Test 1: CONFIG object');
+        log(JSON.stringify(CONFIG, null, 2));
+        
+        // Test 2: Fetch health
+        log('Test 2: Fetching health from primary...');
+        fetch(CONFIG.PRIMARY_API_URL + '/health')
+            .then(r => r.json())
+            .then(data => {
+                log('Primary API Response: ' + JSON.stringify(data));
+            })
+            .catch(err => {
+                log('Primary API Error: ' + err.message);
+            });
+        
+        log('Test 3: Fetching health from secondary...');
+        fetch(CONFIG.SECONDARY_API_URL + '/health')
+            .then(r => r.json())
+            .then(data => {
+                log('Secondary API Response: ' + JSON.stringify(data));
+            })
+            .catch(err => {
+                log('Secondary API Error: ' + err.message);
+            });
+    </script>
+</body>
+</html>

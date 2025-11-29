@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  frontend:
+    image: nginx:alpine
+    container_name: multiregion-frontend
+    ports:
+      - "8080:80"
+    volumes:
+      - ./:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    environment:
+      - LAMBDA_URL_PRIMARY=${LAMBDA_URL_PRIMARY}
+      - LAMBDA_URL_SECONDARY=${LAMBDA_URL_SECONDARY}
+    restart: unless-stopped
